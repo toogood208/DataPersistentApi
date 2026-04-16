@@ -1,0 +1,6 @@
+@DataPersistentApi_HostAddress =  https://nonexercisable-unshrill-lauretta.ngrok-free.dev 
+
+GET {{DataPersistentApi_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
