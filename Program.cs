@@ -20,6 +20,43 @@ builder.Services.AddHttpClient();
 
 // Register ProfileService
 builder.Services.AddScoped<ProfileService>();
+builder.Services.AddScoped<ProfilesQueryService>();
+
+// Build a country map from seed data (if available) to improve NL parsing
+var countryMap = new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+try
+{
+    var seedPath = Path.Combine(builder.Environment.ContentRootPath, "Data/seed/profiles-2026.json");
+    if (File.Exists(seedPath))
+    {
+        var txt = File.ReadAllText(seedPath);
+        using var doc = System.Text.Json.JsonDocument.Parse(txt);
+        var root = doc.RootElement;
+        System.Text.Json.JsonElement arr;
+        if (root.ValueKind == System.Text.Json.JsonValueKind.Object && root.TryGetProperty("profiles", out arr) && arr.ValueKind == System.Text.Json.JsonValueKind.Array)
+        {
+            foreach (var el in arr.EnumerateArray())
+            {
+                if (el.TryGetProperty("country_name", out var cn) && el.TryGetProperty("country_id", out var ci))
+                {
+                    var name = cn.GetString();
+                    var id = ci.GetString();
+                    if (!string.IsNullOrWhiteSpace(name) && !string.IsNullOrWhiteSpace(id))
+                    {
+                        var key = name.ToLowerInvariant();
+                        if (!countryMap.ContainsKey(key)) countryMap[key] = id.ToUpperInvariant();
+                    }
+                }
+            }
+        }
+    }
+}
+catch
+{
+    // ignore any errors reading seed file
+}
+
+builder.Services.AddSingleton(new NlParser(countryMap));
 
 // Configure DbContext: prefer connection string "DefaultConnection", fallback to InMemory for simplicity
 var conn = builder.Configuration.GetConnectionString("DefaultConnection");
@@ -46,28 +83,19 @@ app.UseHttpsRedirection();
 // Map profile endpoints from separate endpoint definitions
 app.MapProfileEndpoints();
 
-var summaries = new[]
+using (var scope = app.Services.CreateScope())
 {
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
-
-app.MapGet("/weatherforecast", () =>
-{
-    var forecast = Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast
-        (
-            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-            Random.Shared.Next(-20, 55),
-            summaries[Random.Shared.Next(summaries.Length)]
-        ))
-        .ToArray();
-    return forecast;
-})
-.WithName("GetWeatherForecast");
+    var db = scope.ServiceProvider.GetRequiredService<AppDBContext>();
+    // run migrations if you want here or run externally
+    // await db.Database.MigrateAsync();
+    // seed (only when flag present to avoid production accidental seed)
+    var envSeed = Environment.GetEnvironmentVariable("SEED");
+    if (!string.IsNullOrEmpty(envSeed) && envSeed == "true")
+    {
+        await SeedData.EnsureSeededAsync(db, Path.Combine(app.Environment.ContentRootPath, "Data/seed/profiles-2026.json"));
+    }
+}           
 
 app.Run();
 
-internal record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
-{
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
-}
+
