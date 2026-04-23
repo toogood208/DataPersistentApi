@@ -26,9 +26,10 @@ public class ProfileService
             return new ServiceResult(true, 400, "Missing or empty name", false, null);
 
         var trimmed = name.Trim();
+        var normalizedName = trimmed.ToLowerInvariant();
 
         // idempotency: check existing by name (case-insensitive)
-        var existing = await _db.Profiles.FirstOrDefaultAsync(p => p.Name.ToLower() == trimmed.ToLower());
+        var existing = await _db.Profiles.FirstOrDefaultAsync(p => p.Name == normalizedName);
         if (existing != null)
             return new ServiceResult(false, 200, null, true, existing);
 
@@ -75,13 +76,12 @@ public class ProfileService
         var profile = new Profile
         {
             Id = UuidV7Generator.NewUuidV7(),
-            Name = trimmed,
-            Gender = genderRes.Gender ?? string.Empty,
+            Name = normalizedName,
+            Gender = (genderRes.Gender ?? string.Empty).ToLowerInvariant(),
             GenderProbability = genderRes.Probability ?? 0.0,
-            SampleSize = genderRes.Count ?? 0,
             Age = age,
             AgeGroup = ageGroup,
-            CountryId = topCountry.Country_id,
+            CountryId = topCountry.Country_id.ToUpperInvariant(),
             CountryName = ResolveCountryName(topCountry.Country_id),
             CountryProbability = topCountry.Probability,
             CreatedAt = DateTime.UtcNow
@@ -104,18 +104,18 @@ public class ProfileService
         var q = _db.Profiles.AsQueryable();
         if (!string.IsNullOrWhiteSpace(gender))
         {
-            var g = gender.Trim().ToLower();
-            q = q.Where(p => p.Gender.ToLower() == g);
+            var g = gender.Trim().ToLowerInvariant();
+            q = q.Where(p => p.Gender == g);
         }
         if (!string.IsNullOrWhiteSpace(countryId))
         {
-            var c = countryId.Trim().ToLower();
-            q = q.Where(p => p.CountryId.ToLower() == c);
+            var c = countryId.Trim().ToUpperInvariant();
+            q = q.Where(p => p.CountryId == c);
         }
         if (!string.IsNullOrWhiteSpace(ageGroup))
         {
-            var a = ageGroup.Trim().ToLower();
-            q = q.Where(p => p.AgeGroup.ToLower() == a);
+            var a = ageGroup.Trim().ToLowerInvariant();
+            q = q.Where(p => p.AgeGroup == a);
         }
 
         return await q.ToListAsync();
@@ -142,7 +142,7 @@ public class ProfileService
     {
         try
         {
-            return new RegionInfo(countryId).EnglishName;
+            return new RegionInfo(countryId.ToUpperInvariant()).EnglishName;
         }
         catch (ArgumentException)
         {

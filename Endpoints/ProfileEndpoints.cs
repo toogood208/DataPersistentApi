@@ -44,7 +44,6 @@ public static class ProfileEndpoints
                         name = p.Name,
                         gender = p.Gender,
                         gender_probability = p.GenderProbability,
-                        sample_size = p.SampleSize,
                         age = p.Age,
                         age_group = p.AgeGroup,
                         country_id = p.CountryId,
@@ -66,7 +65,6 @@ public static class ProfileEndpoints
                     name = created.Name,
                     gender = created.Gender,
                     gender_probability = created.GenderProbability,
-                    sample_size = created.SampleSize,
                     age = created.Age,
                     age_group = created.AgeGroup,
                     country_id = created.CountryId,
@@ -93,7 +91,6 @@ public static class ProfileEndpoints
                     name = p.Name,
                     gender = p.Gender,
                     gender_probability = p.GenderProbability,
-                    sample_size = p.SampleSize,
                     age = p.Age,
                     age_group = p.AgeGroup,
                     country_id = p.CountryId,
@@ -112,9 +109,9 @@ public static class ProfileEndpoints
             var opts = new QueryOptions();
 
             // parse strings
-            opts.Gender = q["gender"].FirstOrDefault();
-            opts.AgeGroup = q["age_group"].FirstOrDefault();
-            opts.CountryId = q["country_id"].FirstOrDefault();
+            opts.Gender = q["gender"].FirstOrDefault()?.Trim().ToLowerInvariant();
+            opts.AgeGroup = q["age_group"].FirstOrDefault()?.Trim().ToLowerInvariant();
+            opts.CountryId = q["country_id"].FirstOrDefault()?.Trim().ToUpperInvariant();
 
     // numeric parsing with 422 on invalid
     if (q.TryGetValue("min_age", out var maStr))

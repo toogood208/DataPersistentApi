@@ -17,13 +17,13 @@ public class ProfilesQueryService
         IQueryable<Profile> q = _db.Profiles.AsQueryable();
 
         if (!string.IsNullOrWhiteSpace(opts.Gender))
-            q = q.Where(p => p.Gender.ToLower() == opts.Gender!.ToLower());
+            q = q.Where(p => p.Gender == opts.Gender);
 
         if (!string.IsNullOrWhiteSpace(opts.AgeGroup))
-            q = q.Where(p => p.AgeGroup.ToLower() == opts.AgeGroup!.ToLower());
+            q = q.Where(p => p.AgeGroup == opts.AgeGroup);
 
         if (!string.IsNullOrWhiteSpace(opts.CountryId))
-            q = q.Where(p => p.CountryId.ToLower() == opts.CountryId!.ToLower());
+            q = q.Where(p => p.CountryId == opts.CountryId);
 
         if (opts.MinAge.HasValue) q = q.Where(p => p.Age >= opts.MinAge.Value);
         if (opts.MaxAge.HasValue) q = q.Where(p => p.Age <= opts.MaxAge.Value);

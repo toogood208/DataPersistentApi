@@ -34,18 +34,19 @@ public static class SeedData
         foreach (var s in seeds)
         {
             if (string.IsNullOrWhiteSpace(s.name)) continue;
-            var exists = await db.Profiles.AnyAsync(p => p.Name.ToLower() == s.name.ToLower());
+            var normalizedName = s.name.Trim().ToLowerInvariant();
+            var exists = await db.Profiles.AnyAsync(p => p.Name == normalizedName);
             if (exists) continue;
             var createdAt = s.created_at ?? DateTime.UtcNow;
             var p = new Profile {
                 Id = UuidV7Generator.NewUuidV7(),
-                Name = s.name,
-                Gender = s.gender,
+                Name = normalizedName,
+                Gender = s.gender.Trim().ToLowerInvariant(),
                 GenderProbability = s.gender_probability,
                 Age = s.age,
-                AgeGroup = s.age_group,
-                CountryId = s.country_id,
-                CountryName = s.country_name,
+                AgeGroup = s.age_group.Trim().ToLowerInvariant(),
+                CountryId = s.country_id.Trim().ToUpperInvariant(),
+                CountryName = s.country_name.Trim(),
                 CountryProbability = s.country_probability,
                 CreatedAt = DateTime.SpecifyKind(createdAt, DateTimeKind.Utc)
             };
