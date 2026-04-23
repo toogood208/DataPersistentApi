@@ -82,6 +82,7 @@ public class ProfileService
             Age = age,
             AgeGroup = ageGroup,
             CountryId = topCountry.Country_id,
+            CountryName = ResolveCountryName(topCountry.Country_id),
             CountryProbability = topCountry.Probability,
             CreatedAt = DateTime.UtcNow
         };
@@ -135,5 +136,17 @@ public class ProfileService
         if (age <= 19) return "teenager";
         if (age <= 59) return "adult";
         return "senior";
+    }
+
+    private static string ResolveCountryName(string countryId)
+    {
+        try
+        {
+            return new RegionInfo(countryId).EnglishName;
+        }
+        catch (ArgumentException)
+        {
+            return countryId;
+        }
     }
 }

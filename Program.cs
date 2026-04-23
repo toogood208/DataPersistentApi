@@ -86,8 +86,10 @@ app.MapProfileEndpoints();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDBContext>();
-    // run migrations if you want here or run externally
-    // await db.Database.MigrateAsync();
+    if (db.Database.IsRelational())
+    {
+        await db.Database.MigrateAsync();
+    }
     // seed (only when flag present to avoid production accidental seed)
     var envSeed = Environment.GetEnvironmentVariable("SEED");
     if (!string.IsNullOrEmpty(envSeed) && envSeed == "true")

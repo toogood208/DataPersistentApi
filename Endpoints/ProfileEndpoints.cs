@@ -1,4 +1,5 @@
 using DataPersistentApi.Services;
+using Microsoft.AspNetCore.Mvc;
 
 namespace DataPersistentApi.Endpoints;
 
@@ -47,6 +48,7 @@ public static class ProfileEndpoints
                         age = p.Age,
                         age_group = p.AgeGroup,
                         country_id = p.CountryId,
+                        country_name = p.CountryName,
                         country_probability = p.CountryProbability,
                         created_at = p.CreatedAt.ToString("o")
                     }
@@ -68,6 +70,7 @@ public static class ProfileEndpoints
                     age = created.Age,
                     age_group = created.AgeGroup,
                     country_id = created.CountryId,
+                    country_name = created.CountryName,
                     country_probability = created.CountryProbability,
                     created_at = created.CreatedAt.ToString("o")
                 }
@@ -94,6 +97,7 @@ public static class ProfileEndpoints
                     age = p.Age,
                     age_group = p.AgeGroup,
                     country_id = p.CountryId,
+                    country_name = p.CountryName,
                     country_probability = p.CountryProbability,
                     created_at = p.CreatedAt.ToString("o")
                 }
@@ -180,7 +184,7 @@ public static class ProfileEndpoints
         });
 
         // GET /api/profiles/search?q=...
-        app.MapGet("/api/profiles/search", async (HttpRequest req, NlParser parser, ProfilesQueryService svc) =>
+        app.MapGet("/api/profiles/search", async (HttpRequest req, [FromServices] NlParser parser, ProfilesQueryService svc) =>
         {
             var q = req.Query["q"].FirstOrDefault();
             if (string.IsNullOrWhiteSpace(q)) return Results.BadRequest(new { status="error", message="Missing or empty parameter" });
