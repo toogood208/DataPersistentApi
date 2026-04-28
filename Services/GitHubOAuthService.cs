@@ -21,6 +21,7 @@ public class GitHubOAuthService
     private readonly RefreshTokenService _refreshTokenService;
     private readonly AuthCookieService _authCookieService;
     private readonly RoleBootstrapOptions _roleBootstrapOptions;
+    private readonly ILogger<GitHubOAuthService> _logger;
 
     public GitHubOAuthService(
         AppDBContext db,
@@ -29,6 +30,7 @@ public class GitHubOAuthService
         JwtTokenService jwtTokenService,
         RefreshTokenService refreshTokenService,
         AuthCookieService authCookieService,
+        ILogger<GitHubOAuthService> logger,
         IOptions<GitHubOAuthOptions> options,
         IOptions<RoleBootstrapOptions> roleBootstrapOptions)
     {
@@ -38,6 +40,7 @@ public class GitHubOAuthService
         _jwtTokenService = jwtTokenService;
         _refreshTokenService = refreshTokenService;
         _authCookieService = authCookieService;
+        _logger = logger;
         _options = options.Value;
         _roleBootstrapOptions = roleBootstrapOptions.Value;
     }
@@ -93,11 +96,13 @@ public class GitHubOAuthService
     {
         if (string.IsNullOrWhiteSpace(_options.ClientId) || string.IsNullOrWhiteSpace(_options.ClientSecret))
         {
+            _logger.LogWarning("OAuth callback failed because GitHub OAuth is not configured.");
             return AuthCompletionResult.Failure("GitHub OAuth is not configured");
         }
 
         if (string.IsNullOrWhiteSpace(code))
         {
+            _logger.LogWarning("OAuth callback failed because the code parameter was missing or empty.");
             return AuthCompletionResult.Failure("Missing or empty code");
         }
 
@@ -106,6 +111,7 @@ public class GitHubOAuthService
         {
             if (!_stateService.TryUnprotect(protectedState, out var parsedState))
             {
+                _logger.LogWarning("OAuth callback failed because the protected state could not be validated.");
                 return AuthCompletionResult.Failure("Invalid OAuth state");
             }
 
@@ -129,23 +135,27 @@ public class GitHubOAuthService
         }
         catch (HttpRequestException)
         {
+            _logger.LogWarning("OAuth callback failed during GitHub token exchange request.");
             return AuthCompletionResult.Failure("GitHub token exchange failed");
         }
 
         if (!tokenResponse.IsSuccessStatusCode)
         {
+            _logger.LogWarning("OAuth callback failed because GitHub token exchange returned status code {StatusCode}.", (int)tokenResponse.StatusCode);
             return AuthCompletionResult.Failure("GitHub token exchange failed");
         }
 
         var tokenPayload = await tokenResponse.Content.ReadFromJsonAsync<GitHubAccessTokenResponse>(cancellationToken: ct);
         if (tokenPayload == null || string.IsNullOrWhiteSpace(tokenPayload.AccessToken))
         {
+            _logger.LogWarning("OAuth callback failed because GitHub did not return a usable access token payload.");
             return AuthCompletionResult.Failure("GitHub token exchange failed");
         }
 
         var profile = await GetGitHubProfileAsync(client, tokenPayload.AccessToken, ct);
         if (profile == null || profile.Id <= 0 || string.IsNullOrWhiteSpace(profile.Login))
         {
+            _logger.LogWarning("OAuth callback failed because GitHub user lookup did not return a valid profile.");
             return AuthCompletionResult.Failure("GitHub user lookup failed");
         }
 
@@ -154,6 +164,12 @@ public class GitHubOAuthService
         {
             email = await GetPrimaryEmailAsync(client, tokenPayload.AccessToken, ct);
         }
+
+        _logger.LogInformation(
+            "GitHub OAuth callback resolved user {Username} with email present: {HasEmail}. ExpectsRedirect: {ExpectsRedirect}.",
+            profile.Login,
+            !string.IsNullOrWhiteSpace(email),
+            statePayload?.ExpectsRedirect ?? false);
 
         var user = await UpsertUserAsync(profile, email, ct);
         var accessToken = _jwtTokenService.CreateAccessToken(user);

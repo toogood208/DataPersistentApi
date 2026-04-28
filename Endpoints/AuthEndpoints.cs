@@ -12,6 +12,8 @@ public static class AuthEndpoints
             .RequireRateLimiting(StartupConstants.AuthRateLimitPolicy);
         var csrfFilter = new CsrfEndpointFilter(AuthCookieService.CsrfCookieName, AuthCookieService.CsrfHeaderName);
 
+        auth.MapMethods("/{*path}", ["OPTIONS"], () => Results.Ok());
+
         auth.MapGet("/github", (HttpRequest request, GitHubOAuthService authService) =>
         {
             var expectsRedirect = !string.Equals(request.Query["mode"], "cli", StringComparison.OrdinalIgnoreCase);
@@ -44,8 +46,9 @@ public static class AuthEndpoints
             });
         });
 
-        auth.MapGet("/github/callback", async (HttpRequest request, GitHubOAuthService authService, CancellationToken ct) =>
+        auth.MapGet("/github/callback", async (HttpRequest request, GitHubOAuthService authService, ILoggerFactory loggerFactory, CancellationToken ct) =>
         {
+            var logger = loggerFactory.CreateLogger("DataPersistentApi.AuthCallback");
             var code = request.Query["code"].FirstOrDefault();
             var protectedState = request.Query["state"].FirstOrDefault();
             var codeVerifier = request.Query["code_verifier"].FirstOrDefault();
@@ -53,6 +56,13 @@ public static class AuthEndpoints
             var result = await authService.CompleteOAuthAsync(request, code ?? string.Empty, protectedState, codeVerifier, ct);
             if (result.IsError)
             {
+                logger.LogWarning(
+                    "OAuth callback failed. Message: {Message}. HasCode: {HasCode}. HasState: {HasState}. HasCodeVerifier: {HasCodeVerifier}",
+                    result.Message,
+                    !string.IsNullOrWhiteSpace(code),
+                    !string.IsNullOrWhiteSpace(protectedState),
+                    !string.IsNullOrWhiteSpace(codeVerifier));
+
                 if (authService.TryBuildClientErrorRedirectUrl(protectedState, result.Message ?? "OAuth callback failed", out var redirectUrl))
                 {
                     return Results.Redirect(redirectUrl);
