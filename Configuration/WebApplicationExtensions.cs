@@ -28,6 +28,7 @@ public static class WebApplicationExtensions
     {
         app.MapAuthEndpoints();
         app.MapProfileEndpoints();
+        app.MapUserEndpoints();
         return app;
     }
 

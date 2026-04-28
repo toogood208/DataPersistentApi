@@ -20,6 +20,7 @@ public class GitHubOAuthService
     private readonly JwtTokenService _jwtTokenService;
     private readonly RefreshTokenService _refreshTokenService;
     private readonly AuthCookieService _authCookieService;
+    private readonly RoleBootstrapOptions _roleBootstrapOptions;
 
     public GitHubOAuthService(
         AppDBContext db,
@@ -28,7 +29,8 @@ public class GitHubOAuthService
         JwtTokenService jwtTokenService,
         RefreshTokenService refreshTokenService,
         AuthCookieService authCookieService,
-        IOptions<GitHubOAuthOptions> options)
+        IOptions<GitHubOAuthOptions> options,
+        IOptions<RoleBootstrapOptions> roleBootstrapOptions)
     {
         _db = db;
         _httpClientFactory = httpClientFactory;
@@ -37,6 +39,7 @@ public class GitHubOAuthService
         _refreshTokenService = refreshTokenService;
         _authCookieService = authCookieService;
         _options = options.Value;
+        _roleBootstrapOptions = roleBootstrapOptions.Value;
     }
 
     public AuthRedirectStartResult CreateAuthorizationRequest(
@@ -325,7 +328,7 @@ public class GitHubOAuthService
                 Username = username,
                 Email = normalizedEmail,
                 AvatarUrl = avatarUrl,
-                Role = "analyst",
+                Role = ResolveInitialRole(username, normalizedEmail),
                 IsActive = true,
                 LastLoginAt = DateTime.UtcNow,
                 CreatedAt = DateTime.UtcNow,
@@ -338,10 +341,30 @@ public class GitHubOAuthService
             user.Email = normalizedEmail;
             user.AvatarUrl = avatarUrl;
             user.LastLoginAt = DateTime.UtcNow;
+            if (ShouldBootstrapAdmin(username, normalizedEmail))
+            {
+                user.Role = "admin";
+            }
         }
 
         await _db.SaveChangesAsync(ct);
         return user;
+    }
+
+    private string ResolveInitialRole(string username, string? email)
+    {
+        return ShouldBootstrapAdmin(username, email) ? "admin" : "analyst";
+    }
+
+    private bool ShouldBootstrapAdmin(string username, string? email)
+    {
+        if (_roleBootstrapOptions.AdminUsernames.Any(u => string.Equals(u, username, StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        return !string.IsNullOrWhiteSpace(email) &&
+               _roleBootstrapOptions.AdminEmails.Any(e => string.Equals(e, email, StringComparison.OrdinalIgnoreCase));
     }
 
     public record AuthRedirectStartResult(bool IsError, string? Message, string? AuthorizeUrl, string? ProtectedState)

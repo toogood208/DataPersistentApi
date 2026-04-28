@@ -14,6 +14,7 @@ public static class ServiceCollectionExtensions
     {
         services.Configure<GitHubOAuthOptions>(configuration.GetSection(GitHubOAuthOptions.SectionName));
         services.Configure<JwtOptions>(configuration.GetSection(JwtOptions.SectionName));
+        services.Configure<RoleBootstrapOptions>(configuration.GetSection(RoleBootstrapOptions.SectionName));
         return services;
     }
 

@@ -74,7 +74,7 @@ public static class AuthEndpoints
                 return Results.Ok(new { status = "success", message = "Login successful" });
             }
 
-            return Results.Ok(result.Response);
+            return Results.Ok(CreateAuthCallbackResponse(result.Response!.Data));
         });
 
         auth.MapPost("/refresh", async (RefreshTokenRequestDto? req, RefreshTokenService refreshTokenService, JwtTokenService jwtTokenService, AuthCookieService authCookieService, HttpRequest request, HttpResponse response, CancellationToken ct) =>
@@ -143,5 +143,17 @@ public static class AuthEndpoints
             authService.ClearWebSessionCookies(response);
             return Results.Ok(new { status = "success", message = "Logged out successfully" });
         }).AddEndpointFilter(csrfFilter);
+    }
+
+    private static AuthCallbackResponseDto CreateAuthCallbackResponse(AuthTokenPairDto tokenPair)
+    {
+        return new AuthCallbackResponseDto(
+            "success",
+            tokenPair.AccessToken,
+            tokenPair.RefreshToken,
+            tokenPair.TokenType,
+            tokenPair.ExpiresIn,
+            tokenPair.RefreshExpiresIn,
+            tokenPair.User);
     }
 }

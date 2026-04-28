@@ -1,31 +1,49 @@
 # Insighta Backend
 
-`Insighta Backend` is the Stage 3 backend service for profile generation, querying, authentication, authorization, token lifecycle management, and export.
+`Insighta Backend` is the Stage 3 backend repository for Insighta Labs+. It is the shared API and auth service consumed by the CLI and web portal.
 
-This repository is the backend source of truth for:
+This backend is responsible for:
 
 - GitHub OAuth login
-- PKCE-friendly CLI login initiation
+- CLI-friendly PKCE login initiation
+- user persistence and role assignment
 - JWT access token issuance
 - refresh token rotation and revocation
-- role-based access control
+- cookie-backed browser sessions
+- CSRF protection for cookie-authenticated write operations
 - protected profile APIs
-- profile filtering, sorting, pagination, and natural-language search
+- filtering, sorting, pagination, and natural-language search
 - CSV export
+- rate limiting and request logging
 
-The CLI app and web portal are expected to consume this API as separate clients.
+## System Architecture
+
+The full Stage 3 platform is split into three repositories:
+
+- `insighta-backend`: this repository, the source of truth for auth, users, roles, and profile data access
+- `insighta-cli`: a separate command-line client that calls this backend
+- `insighta-web`: a separate browser client that calls this backend
+
+The backend is the shared contract for both clients. Data, auth rules, role checks, pagination, search behavior, and export behavior are centralized here so all interfaces stay consistent.
 
 ## Tech Stack
 
 - .NET `10.0`
 - ASP.NET Core minimal APIs
 - Entity Framework Core
-- SQL Server or EF InMemory fallback
+- SQL Server with EF InMemory fallback
 - JWT bearer authentication
+- GitHub OAuth
 
 ## Configuration
 
-The app reads settings from `appsettings.json`.
+The app reads configuration from:
+
+1. `appsettings.json`
+2. environment variables
+3. .NET user-secrets in Development
+
+Tracked config intentionally keeps secret values blank. Real credentials should be supplied through user-secrets or environment variables.
 
 ### Connection string
 
@@ -71,9 +89,49 @@ Notes:
 
 Notes:
 
-- Set a real `SigningKey` outside development.
-- Access tokens are short-lived JWTs.
-- Refresh tokens are stored hashed in the database.
+- access tokens expire after `3` minutes
+- refresh tokens expire after `5` minutes
+- refresh tokens are stored hashed in the database
+
+### CORS settings
+
+```json
+"Cors": {
+  "AllowedOrigins": []
+}
+```
+
+Notes:
+
+- when `AllowedOrigins` is empty, the backend allows any origin without credentials
+- when one or more origins are configured, the backend enables credentialed CORS for those origins
+- a separate web portal should set its real frontend origin here
+
+### Bootstrap admin settings
+
+```json
+"RoleBootstrap": {
+  "AdminUsernames": [],
+  "AdminEmails": []
+}
+```
+
+Notes:
+
+- matching GitHub usernames or emails are assigned `admin` during login
+- all other new users default to `analyst`
+- this is the intended way to obtain an admin login for local testing without manual database edits
+
+Example local setup with user-secrets:
+
+```powershell
+dotnet user-secrets init
+dotnet user-secrets set "GitHub:ClientId" "YOUR_CLIENT_ID"
+dotnet user-secrets set "GitHub:ClientSecret" "YOUR_CLIENT_SECRET"
+dotnet user-secrets set "GitHub:CallbackUrl" "https://your-public-url/auth/github/callback"
+dotnet user-secrets set "Auth:SigningKey" "YOUR_SIGNING_KEY"
+dotnet user-secrets set "RoleBootstrap:AdminUsernames:0" "your-github-username"
+```
 
 ## Running Locally
 
@@ -82,6 +140,12 @@ Restore and run:
 ```powershell
 dotnet restore
 dotnet run
+```
+
+Apply migrations:
+
+```powershell
+dotnet ef database update
 ```
 
 Seed profiles locally:
@@ -93,10 +157,10 @@ dotnet run
 
 Seeding notes:
 
-- The seed loader accepts either a raw JSON array or an object with a top-level `profiles` array.
-- Seeding is idempotent by normalized profile name.
+- the seed loader accepts either a raw JSON array or an object with a top-level `profiles` array
+- seeding is idempotent by normalized profile name
 
-## Authentication
+## Authentication Flow
 
 ### Browser login
 
@@ -116,9 +180,18 @@ After GitHub callback, the backend:
 1. exchanges the authorization code
 2. fetches the GitHub profile and email
 3. creates or updates the local user
-4. issues an access token and refresh token
+4. assigns `admin` or `analyst`
+5. issues an access token and refresh token
+6. stores them in HTTP-only cookies for browser sessions
+7. sets a CSRF cookie for state-changing requests
 
-If `client_redirect_uri` was provided, the backend redirects back to that client with token data in the URL fragment.
+Browser session cookies:
+
+- `insighta_access_token` as HTTP-only
+- `insighta_refresh_token` as HTTP-only
+- `insighta_csrf` as a readable CSRF token cookie
+
+If `client_redirect_uri` was provided, the backend redirects back with a success or error fragment. Tokens are not exposed in the fragment.
 
 ### CLI / PKCE login
 
@@ -133,12 +206,36 @@ Optional query parameters:
 
 The backend returns JSON containing:
 
-- `authorize_url`
-- protected `state`
+- `data.authorize_url`
+- `data.state`
 
 Complete the flow with:
 
 `GET /auth/github/callback?code=...&state=...&code_verifier=...`
+
+Successful CLI-style callback response:
+
+```json
+{
+  "status": "success",
+  "access_token": "...",
+  "refresh_token": "...",
+  "token_type": "Bearer",
+  "expires_in": 180,
+  "refresh_expires_in": 300,
+  "user": {
+    "id": "uuid",
+    "github_id": "123456",
+    "username": "octocat",
+    "email": "octocat@example.com",
+    "avatar_url": "https://...",
+    "role": "analyst",
+    "is_active": true,
+    "last_login_at": "timestamp",
+    "created_at": "timestamp"
+  }
+}
+```
 
 ### Refresh tokens
 
@@ -148,9 +245,24 @@ Refresh:
 
 ```json
 {
-  "refreshToken": "..."
+  "refresh_token": "..."
 }
 ```
+
+Token-style success response:
+
+```json
+{
+  "status": "success",
+  "access_token": "...",
+  "refresh_token": "..."
+}
+```
+
+Cookie-style refresh:
+
+- if the refresh token is supplied through the session cookie, the backend rotates cookies and returns `{ "status": "success" }`
+- cookie-based refresh requires `X-CSRF-Token`
 
 Logout:
 
@@ -158,45 +270,62 @@ Logout:
 
 ```json
 {
-  "refreshToken": "..."
+  "refresh_token": "..."
 }
 ```
 
-Token lifecycle:
+Token lifecycle rules:
 
 - refresh tokens are hashed before storage
 - refresh uses rotation
 - the old refresh token is revoked immediately when exchanged
 - logout revokes the provided refresh token
 
-## Authorization
+## User Model And Role Enforcement
+
+Users are stored with:
+
+- `id`
+- `github_id`
+- `username`
+- `email`
+- `avatar_url`
+- `role`
+- `is_active`
+- `last_login_at`
+- `created_at`
 
 Roles:
 
 - `admin`
 - `analyst`
 
-Active-state enforcement:
-
-- users must exist in the database
-- inactive users are denied with `403`
-
-Policy rules:
+Role rules:
 
 - `admin` can create, list, export, and delete profiles
 - `admin` and `analyst` can read individual profiles and use natural-language search
+
+Active-state enforcement:
+
+- authenticated users must exist in the database
+- inactive users are denied with `403`
+
+### Current user endpoint
+
+`GET /api/users/me`
+
+This endpoint returns the authenticated user profile and is useful for CLI and web clients after login.
 
 ## API Requirements
 
 ### Authentication
 
-All `/api/profiles*` endpoints require a bearer token.
+All `/api/*` endpoints require authentication.
 
-Example header:
+Clients can authenticate with either:
 
-```http
-Authorization: Bearer <access-token>
-```
+- `Authorization: Bearer <access-token>`
+- browser session cookies issued by the backend
 
 ### API version header
 
@@ -211,7 +340,7 @@ Requests without that exact header return:
 ```json
 {
   "status": "error",
-  "message": "Missing or invalid X-API-Version"
+  "message": "API version header required"
 }
 ```
 
@@ -230,6 +359,12 @@ Request body:
   "name": "Ada"
 }
 ```
+
+Behavior:
+
+- calls the Stage 1 external data providers
+- transforms the result
+- stores the saved profile
 
 ### Get profile by id
 
@@ -257,7 +392,7 @@ Supported query parameters:
 - `page`
 - `limit`
 
-Pagination response includes:
+Paginated response includes:
 
 - `page`
 - `limit`
@@ -300,13 +435,61 @@ The export reuses the same filters and sorting behavior as `GET /api/profiles`.
 Response:
 
 - content type `text/csv`
-- downloadable file name `profiles.csv`
+- downloadable file name `profiles_<timestamp>.csv`
+
+CSV column order:
+
+- `id`
+- `name`
+- `gender`
+- `gender_probability`
+- `age`
+- `age_group`
+- `country_id`
+- `country_name`
+- `country_probability`
+- `created_at`
 
 ### Delete profile
 
 `DELETE /api/profiles/{id}`
 
 Admin only.
+
+## Natural Language Parsing Approach
+
+Natural-language search is implemented with a deterministic parser, not a generative model. The parser maps recognized phrases into structured filter options that reuse the same query pipeline as the normal list endpoint.
+
+This means:
+
+- search behavior is predictable
+- profile search stays consistent across API, CLI, and web
+- results follow the same filtering, sorting, and pagination rules as structured requests
+
+## Multi-Interface Contract
+
+For the CLI client:
+
+- create a PKCE `code_verifier` and `code_challenge`
+- call `/auth/github?mode=cli...`
+- open the returned `authorize_url`
+- complete callback handling with `code_verifier`
+- store returned access and refresh tokens locally
+- call `/auth/refresh` when the access token expires
+
+For the web client:
+
+- send users to `/auth/github`
+- optionally supply `client_redirect_uri` and client `state`
+- rely on HTTP-only cookies for the session
+- send `X-CSRF-Token` on cookie-authenticated refresh, logout, and other state-changing operations
+
+For both clients:
+
+- send `X-API-Version: 1` on all `/api/profiles*` requests
+- treat access tokens as short-lived
+- treat refresh tokens as session credentials
+- consume the same profile list, search, detail, and export endpoints
 
 ## Rate Limits
 
@@ -335,7 +518,7 @@ Each request logs:
 
 ## Error Format
 
-Newer auth, versioning, rate limit, and authorization paths use:
+Auth, versioning, rate limit, and authorization paths use:
 
 ```json
 {
@@ -352,31 +535,17 @@ Examples:
 - `422` for invalid query parameters
 - `429` for rate limiting
 
-## Integration Expectations
+## CI
 
-For the web client:
+This repository includes GitHub Actions in `.github/workflows/backend-ci.yml`.
 
-- send users to `/auth/github`
-- optionally supply `client_redirect_uri` and client `state`
-- read tokens from the redirect fragment after callback
+The workflow runs on `push` and `pull_request` to `main` and `master`, and performs:
 
-For the CLI client:
-
-- create a PKCE `code_verifier` and `code_challenge`
-- call `/auth/github?mode=cli...`
-- open the returned `authorize_url`
-- complete callback handling with `code_verifier`
-- store and later rotate refresh tokens through `/auth/refresh`
-
-For both clients:
-
-- send `Authorization: Bearer <token>` on protected profile routes
-- send `X-API-Version: 1` on all `/api/profiles*` requests
-- treat access tokens as short-lived
-- treat refresh tokens as session credentials
+- `dotnet restore`
+- `dotnet build --configuration Release`
 
 ## Notes
 
-- All timestamps are stored and returned in UTC ISO 8601 format.
-- IDs are generated as UUID v7 strings.
-- CORS is configured with `Access-Control-Allow-Origin: *`.
+- all timestamps are stored and returned in UTC ISO 8601 format
+- IDs are generated as UUID v7 strings
+- secret values should be provided through user-secrets or environment variables, not committed to git
