@@ -74,10 +74,11 @@ public class GitHubOAuthService
         }
 
         var protectedState = _stateService.Protect(clientRedirectUri, userState, expectsRedirect);
+        var redirectUri = ResolveAuthorizationRedirectUri(request, clientRedirectUri, expectsRedirect);
         var query = new Dictionary<string, string?>
         {
             ["client_id"] = _options.ClientId,
-            ["redirect_uri"] = ResolveCallbackUrl(request),
+            ["redirect_uri"] = redirectUri,
             ["scope"] = _options.Scope,
             ["state"] = protectedState
         };
@@ -118,13 +119,15 @@ public class GitHubOAuthService
             statePayload = parsedState;
         }
 
+        var redirectUri = ResolveTokenExchangeRedirectUri(request, statePayload);
+
         var client = _httpClientFactory.CreateClient();
         client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("InsightaBackend", "1.0"));
         client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
         using var tokenRequest = new HttpRequestMessage(HttpMethod.Post, _options.TokenUrl)
         {
-            Content = new FormUrlEncodedContent(BuildTokenExchangeForm(request, code, codeVerifier))
+            Content = new FormUrlEncodedContent(BuildTokenExchangeForm(code, codeVerifier, redirectUri))
         };
         tokenRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
@@ -252,7 +255,7 @@ public class GitHubOAuthService
         _authCookieService.ClearAuthCookies(response);
     }
 
-    private string ResolveCallbackUrl(HttpRequest request)
+    private string ResolveBackendCallbackUrl(HttpRequest request)
     {
         if (!string.IsNullOrWhiteSpace(_options.CallbackUrl))
         {
@@ -262,14 +265,35 @@ public class GitHubOAuthService
         return $"{request.Scheme}://{request.Host}/auth/github/callback";
     }
 
-    private Dictionary<string, string> BuildTokenExchangeForm(HttpRequest request, string code, string? codeVerifier)
+    private string ResolveAuthorizationRedirectUri(HttpRequest request, string? clientRedirectUri, bool expectsRedirect)
+    {
+        if (!expectsRedirect && !string.IsNullOrWhiteSpace(clientRedirectUri))
+        {
+            return clientRedirectUri;
+        }
+
+        return ResolveBackendCallbackUrl(request);
+    }
+
+    private string ResolveTokenExchangeRedirectUri(HttpRequest request, OAuthStateService.OAuthStatePayload? statePayload)
+    {
+        if (statePayload is { ExpectsRedirect: false } &&
+            !string.IsNullOrWhiteSpace(statePayload.ClientRedirectUri))
+        {
+            return statePayload.ClientRedirectUri;
+        }
+
+        return ResolveBackendCallbackUrl(request);
+    }
+
+    private Dictionary<string, string> BuildTokenExchangeForm(string code, string? codeVerifier, string redirectUri)
     {
         var form = new Dictionary<string, string>
         {
             ["client_id"] = _options.ClientId,
             ["client_secret"] = _options.ClientSecret,
             ["code"] = code,
-            ["redirect_uri"] = ResolveCallbackUrl(request)
+            ["redirect_uri"] = redirectUri
         };
 
         if (!string.IsNullOrWhiteSpace(codeVerifier))
