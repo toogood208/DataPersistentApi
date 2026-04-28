@@ -1,5 +1,10 @@
+using System.Globalization;
+using System.Text;
+using DataPersistentApi.Configuration;
+using DataPersistentApi.Models;
 using DataPersistentApi.Services;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.WebUtilities;
 
 namespace DataPersistentApi.Endpoints;
 
@@ -10,8 +15,14 @@ public static class ProfileEndpoints
 
     public static void MapProfileEndpoints(this WebApplication app)
     {
+        var profiles = app.MapGroup("/api/profiles")
+            .RequireAuthorization()
+            .RequireRateLimiting(StartupConstants.ApiRateLimitPolicy)
+            .AddEndpointFilter(new ApiVersionEndpointFilter(StartupConstants.ApiVersionHeader, StartupConstants.ApiVersionValue));
+        var csrfFilter = new CsrfEndpointFilter(AuthCookieService.CsrfCookieName, AuthCookieService.CsrfHeaderName);
+
         // POST /api/profiles
-        app.MapPost("/api/profiles", async (CreateProfileRequest? req, ProfileService svc) =>
+        profiles.MapPost("", async (CreateProfileRequest? req, ProfileService svc) =>
         {
             if (req == null)
             {
@@ -73,10 +84,10 @@ public static class ProfileEndpoints
                     created_at = created.CreatedAt.ToString("o")
                 }
             });
-        });
+        }).RequireAuthorization(StartupConstants.AdminOnlyPolicy).AddEndpointFilter(csrfFilter);
 
         // GET /api/profiles/{id}
-        app.MapGet("/api/profiles/{id}", async (string id, ProfileService svc) =>
+        profiles.MapGet("/{id}", async (string id, ProfileService svc) =>
         {
             var p = await svc.GetByIdAsync(id);
             if (p == null)
@@ -99,147 +110,259 @@ public static class ProfileEndpoints
                     created_at = p.CreatedAt.ToString("o")
                 }
             });
-        });
+        }).RequireAuthorization(StartupConstants.ReadAccessPolicy);
 
         // GET /api/profiles
-        app.MapGet("/api/profiles", async (HttpRequest req, ProfilesQueryService svc) =>
+        profiles.MapGet("", async (HttpRequest req, ProfilesQueryService svc) =>
         {
-            // parse query params
-            var q = req.Query;
-            var opts = new QueryOptions();
-
-            // parse strings
-            opts.Gender = q["gender"].FirstOrDefault()?.Trim().ToLowerInvariant();
-            opts.AgeGroup = q["age_group"].FirstOrDefault()?.Trim().ToLowerInvariant();
-            opts.CountryId = q["country_id"].FirstOrDefault()?.Trim().ToUpperInvariant();
-
-    // numeric parsing with 422 on invalid
-    if (q.TryGetValue("min_age", out var maStr))
-    {
-        if (!int.TryParse(maStr, out var maVal)) return Results.UnprocessableEntity(new { status = "error", message = "Invalid query parameters" });
-        opts.MinAge = maVal;
-    }
-
-    if (q.TryGetValue("max_age", out var xaStr))
-    {
-        if (!int.TryParse(xaStr, out var xaVal)) return Results.UnprocessableEntity(new { status = "error", message = "Invalid query parameters" });
-        opts.MaxAge = xaVal;
-    }
-
-    if (q.TryGetValue("min_gender_probability", out var mgpStr))
-    {
-        if (!double.TryParse(mgpStr, out var mgpVal)) return Results.UnprocessableEntity(new { status = "error", message = "Invalid query parameters" });
-        opts.MinGenderProbability = mgpVal;
-    }
-
-    if (q.TryGetValue("min_country_probability", out var mcpStr))
-    {
-        if (!double.TryParse(mcpStr, out var mcpVal)) return Results.UnprocessableEntity(new { status = "error", message = "Invalid query parameters" });
-        opts.MinCountryProbability = mcpVal;
-    }
-
-    // sort & pagination
-    opts.SortBy = q["sort_by"].FirstOrDefault();
-    opts.Order = q["order"].FirstOrDefault();
-            // validate sort_by and order
-            var validSort = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "age", "created_at", "gender_probability" };
-            var validOrder = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "asc", "desc" };
-            if (!string.IsNullOrWhiteSpace(opts.SortBy) && !validSort.Contains(opts.SortBy))
+            var parseResult = TryParseProfilesQuery(req.Query);
+            if (parseResult.IsError)
+            {
                 return Results.UnprocessableEntity(new { status = "error", message = "Invalid query parameters" });
-            if (!string.IsNullOrWhiteSpace(opts.Order) && !validOrder.Contains(opts.Order))
-                return Results.UnprocessableEntity(new { status = "error", message = "Invalid query parameters" });
-    if (q.TryGetValue("page", out var pStr))
-    {
-        if (!int.TryParse(pStr, out var pageVal) || pageVal < 1) return Results.UnprocessableEntity(new { status = "error", message = "Invalid query parameters" });
-        opts.Page = pageVal;
-    }
-    if (q.TryGetValue("limit", out var lStr))
-    {
-        if (!int.TryParse(lStr, out var limitVal) || limitVal < 1 || limitVal > 50) return Results.UnprocessableEntity(new { status = "error", message = "Invalid query parameters" });
-        opts.Limit = limitVal;
-    }
+            }
+
+            var opts = parseResult.Options!;
 
             var (total, items) = await svc.QueryAsync(opts);
-            // format created_at to ISO
-            var data = items.Select(i => {
-                var d = (dynamic)i;
-                return new {
-                    id = d.id,
-                    name = d.name,
-                    gender = d.gender,
-                    gender_probability = d.gender_probability,
-                    age = d.age,
-                    age_group = d.age_group,
-                    country_id = d.country_id,
-                    country_name = d.country_name,
-                    country_probability = d.country_probability,
-                    created_at = ((DateTime)d.created_at).ToString("o")
-                };
-            }).ToList();
-
-            return Results.Ok(new { status = "success", page = opts.Page, limit = opts.Limit, total, data });
-        });
+            return Results.Ok(CreatePagedResponse(req, opts, total, items));
+        }).RequireAuthorization(StartupConstants.AdminOnlyPolicy);
 
         // GET /api/profiles/search?q=...
-        app.MapGet("/api/profiles/search", async (HttpRequest req, [FromServices] NlParser parser, ProfilesQueryService svc) =>
+        profiles.MapGet("/search", async (HttpRequest req, [FromServices] NlParser parser, ProfilesQueryService svc) =>
         {
             var q = req.Query["q"].FirstOrDefault();
             if (string.IsNullOrWhiteSpace(q)) return Results.BadRequest(new { status="error", message="Missing or empty parameter" });
 
             if (!parser.TryParse(q!, out var opts)) return Results.BadRequest(new { status="error", message="Unable to interpret query" });
 
-    // pagination & optional sort support same as above
-    if (req.Query.TryGetValue("sort_by", out var sb))
-    {
-        var sortVal = sb.FirstOrDefault();
-        var validSort = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "age", "created_at", "gender_probability" };
-        if (!string.IsNullOrWhiteSpace(sortVal) && !validSort.Contains(sortVal)) return Results.UnprocessableEntity(new { status = "error", message = "Invalid query parameters" });
-        opts.SortBy = sortVal;
-    }
-    if (req.Query.TryGetValue("order", out var ord))
-    {
-        var orderVal = ord.FirstOrDefault();
-        var validOrder = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "asc", "desc" };
-        if (!string.IsNullOrWhiteSpace(orderVal) && !validOrder.Contains(orderVal)) return Results.UnprocessableEntity(new { status = "error", message = "Invalid query parameters" });
-        opts.Order = orderVal;
-    }
-    if (req.Query.TryGetValue("page", out var pageStr))
-    {
-        if (!int.TryParse(pageStr, out var pageVal) || pageVal < 1) return Results.UnprocessableEntity(new { status = "error", message = "Invalid query parameters" });
-        opts.Page = pageVal;
-    }
-    if (req.Query.TryGetValue("limit", out var limitStr))
-    {
-        if (!int.TryParse(limitStr, out var limitVal) || limitVal < 1 || limitVal > 50) return Results.UnprocessableEntity(new { status = "error", message = "Invalid query parameters" });
-        opts.Limit = limitVal;
-    }
+            var parseResult = TryApplyPagingAndSorting(req.Query, opts);
+            if (parseResult.IsError)
+            {
+                return Results.UnprocessableEntity(new { status = "error", message = "Invalid query parameters" });
+            }
 
             var (total, items) = await svc.QueryAsync(opts);
-            var data = items.Select(i => {
-                var d = (dynamic)i;
-                return new {
-                    id = d.id,
-                    name = d.name,
-                    gender = d.gender,
-                    gender_probability = d.gender_probability,
-                    age = d.age,
-                    age_group = d.age_group,
-                    country_id = d.country_id,
-                    country_name = d.country_name,
-                    country_probability = d.country_probability,
-                    created_at = ((DateTime)d.created_at).ToString("o")
-                };
-            }).ToList();
+            return Results.Ok(CreatePagedResponse(req, opts, total, items));
+        }).RequireAuthorization(StartupConstants.ReadAccessPolicy);
 
-            return Results.Ok(new { status = "success", page = opts.Page, limit = opts.Limit, total, data });
-        });
+        // GET /api/profiles/export?format=csv
+        profiles.MapGet("/export", async (HttpRequest req, ProfilesQueryService svc) =>
+        {
+            var format = req.Query["format"].FirstOrDefault();
+            if (!string.Equals(format, "csv", StringComparison.OrdinalIgnoreCase))
+            {
+                return Results.BadRequest(new { status = "error", message = "Unsupported export format" });
+            }
+
+            var parseResult = TryParseProfilesQuery(req.Query);
+            if (parseResult.IsError)
+            {
+                return Results.UnprocessableEntity(new { status = "error", message = "Invalid query parameters" });
+            }
+
+            var opts = parseResult.Options!;
+            var items = await svc.QueryAllAsync(opts);
+            var csv = BuildCsv(items);
+
+            return Results.File(
+                Encoding.UTF8.GetBytes(csv),
+                "text/csv; charset=utf-8",
+                $"profiles_{DateTime.UtcNow:yyyyMMddHHmmss}.csv");
+        }).RequireAuthorization(StartupConstants.AdminOnlyPolicy);
 
         // DELETE /api/profiles/{id}
-        app.MapDelete("/api/profiles/{id}", async (string id, ProfileService svc) =>
+        profiles.MapDelete("/{id}", async (string id, ProfileService svc) =>
         {
             var ok = await svc.DeleteAsync(id);
             if (!ok) return Results.NotFound(new { status = "error", message = "Profile not found" });
             return Results.NoContent();
-        });
+        }).RequireAuthorization(StartupConstants.AdminOnlyPolicy).AddEndpointFilter(csrfFilter);
+    }
+
+    private static ParseQueryResult TryParseProfilesQuery(IQueryCollection query)
+    {
+        var opts = new QueryOptions
+        {
+            Gender = query["gender"].FirstOrDefault()?.Trim().ToLowerInvariant(),
+            AgeGroup = query["age_group"].FirstOrDefault()?.Trim().ToLowerInvariant(),
+            CountryId = query["country_id"].FirstOrDefault()?.Trim().ToUpperInvariant()
+        };
+
+        if (query.TryGetValue("min_age", out var minAgeStr))
+        {
+            if (!int.TryParse(minAgeStr, out var minAge))
+            {
+                return ParseQueryResult.Error();
+            }
+
+            opts.MinAge = minAge;
+        }
+
+        if (query.TryGetValue("max_age", out var maxAgeStr))
+        {
+            if (!int.TryParse(maxAgeStr, out var maxAge))
+            {
+                return ParseQueryResult.Error();
+            }
+
+            opts.MaxAge = maxAge;
+        }
+
+        if (query.TryGetValue("min_gender_probability", out var minGenderProbabilityStr))
+        {
+            if (!double.TryParse(minGenderProbabilityStr, out var minGenderProbability))
+            {
+                return ParseQueryResult.Error();
+            }
+
+            opts.MinGenderProbability = minGenderProbability;
+        }
+
+        if (query.TryGetValue("min_country_probability", out var minCountryProbabilityStr))
+        {
+            if (!double.TryParse(minCountryProbabilityStr, out var minCountryProbability))
+            {
+                return ParseQueryResult.Error();
+            }
+
+            opts.MinCountryProbability = minCountryProbability;
+        }
+
+        return TryApplyPagingAndSorting(query, opts);
+    }
+
+    private static ParseQueryResult TryApplyPagingAndSorting(IQueryCollection query, QueryOptions opts)
+    {
+        opts.SortBy = query["sort_by"].FirstOrDefault();
+        opts.Order = query["order"].FirstOrDefault();
+
+        var validSort = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "age", "created_at", "gender_probability" };
+        var validOrder = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "asc", "desc" };
+
+        if (!string.IsNullOrWhiteSpace(opts.SortBy) && !validSort.Contains(opts.SortBy))
+        {
+            return ParseQueryResult.Error();
+        }
+
+        if (!string.IsNullOrWhiteSpace(opts.Order) && !validOrder.Contains(opts.Order))
+        {
+            return ParseQueryResult.Error();
+        }
+
+        if (query.TryGetValue("page", out var pageStr))
+        {
+            if (!int.TryParse(pageStr, out var page) || page < 1)
+            {
+                return ParseQueryResult.Error();
+            }
+
+            opts.Page = page;
+        }
+
+        if (query.TryGetValue("limit", out var limitStr))
+        {
+            if (!int.TryParse(limitStr, out var limit) || limit < 1 || limit > 50)
+            {
+                return ParseQueryResult.Error();
+            }
+
+            opts.Limit = limit;
+        }
+
+        return ParseQueryResult.Success(opts);
+    }
+
+    private static object CreatePagedResponse(HttpRequest req, QueryOptions opts, int total, List<ProfileListItemDto> items)
+    {
+        var totalPages = total == 0 ? 0 : (int)Math.Ceiling(total / (double)opts.Limit);
+        var data = items.Select(SerializeProfileListItem).ToList();
+
+        return new
+        {
+            status = "success",
+            page = opts.Page,
+            limit = opts.Limit,
+            total,
+            total_pages = totalPages,
+            links = new
+            {
+                self = BuildPageLink(req, opts.Page, opts.Limit),
+                next = totalPages > 0 && opts.Page < totalPages ? BuildPageLink(req, opts.Page + 1, opts.Limit) : null,
+                prev = opts.Page > 1 && totalPages > 0 ? BuildPageLink(req, opts.Page - 1, opts.Limit) : null
+            },
+            data
+        };
+    }
+
+    private static object SerializeProfileListItem(ProfileListItemDto item)
+    {
+        return new
+        {
+            id = item.Id,
+            name = item.Name,
+            gender = item.Gender,
+            gender_probability = item.GenderProbability,
+            age = item.Age,
+            age_group = item.AgeGroup,
+            country_id = item.CountryId,
+            country_name = item.CountryName,
+            country_probability = item.CountryProbability,
+            created_at = item.CreatedAt.ToString("o")
+        };
+    }
+
+    private static string BuildCsv(IEnumerable<ProfileListItemDto> items)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("id,name,gender,gender_probability,age,age_group,country_id,country_name,country_probability,created_at");
+
+        foreach (var item in items)
+        {
+            sb.AppendLine(string.Join(",", new[]
+            {
+                EscapeCsv(item.Id),
+                EscapeCsv(item.Name),
+                EscapeCsv(item.Gender),
+                item.GenderProbability.ToString(CultureInfo.InvariantCulture),
+                item.Age.ToString(CultureInfo.InvariantCulture),
+                EscapeCsv(item.AgeGroup),
+                EscapeCsv(item.CountryId),
+                EscapeCsv(item.CountryName),
+                item.CountryProbability.ToString(CultureInfo.InvariantCulture),
+                EscapeCsv(item.CreatedAt.ToString("o"))
+            }));
+        }
+
+        return sb.ToString();
+    }
+
+    private static string EscapeCsv(string? value)
+    {
+        var safeValue = value ?? string.Empty;
+        if (!safeValue.Contains(',') && !safeValue.Contains('"') && !safeValue.Contains('\n') && !safeValue.Contains('\r'))
+        {
+            return safeValue;
+        }
+
+        return $"\"{safeValue.Replace("\"", "\"\"")}\"";
+    }
+
+    private static string BuildPageLink(HttpRequest req, int page, int limit)
+    {
+        var query = req.Query.ToDictionary(
+            kvp => kvp.Key,
+            kvp => kvp.Value.ToString(),
+            StringComparer.OrdinalIgnoreCase);
+
+        query["page"] = page.ToString();
+        query["limit"] = limit.ToString();
+
+        return QueryHelpers.AddQueryString($"{req.Scheme}://{req.Host}{req.PathBase}{req.Path}", query!);
+    }
+
+    private record ParseQueryResult(bool IsError, QueryOptions? Options)
+    {
+        public static ParseQueryResult Success(QueryOptions opts) => new(false, opts);
+        public static ParseQueryResult Error() => new(true, null);
     }
 }

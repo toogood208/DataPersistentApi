@@ -4,6 +4,7 @@ using DataPersistentApi.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace DataPersistentApi.Migrations
 {
     [DbContext(typeof(AppDBContext))]
-    partial class AppDBContextModelSnapshot : ModelSnapshot
+    [Migration("20260428195407_AddUserAndRefreshTokenPersistence")]
+    partial class AddUserAndRefreshTokenPersistence
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -135,6 +138,9 @@ namespace DataPersistentApi.Migrations
                         .HasColumnType("datetime2")
                         .HasDefaultValueSql("SYSUTCDATETIME()");
 
+                    b.Property<string>("DisplayName")
+                        .HasColumnType("varchar(255)");
+
                     b.Property<string>("Email")
                         .HasColumnType("varchar(320)");
 
@@ -142,15 +148,14 @@ namespace DataPersistentApi.Migrations
                         .IsRequired()
                         .HasColumnType("varchar(50)");
 
+                    b.Property<string>("GitHubLogin")
+                        .IsRequired()
+                        .HasColumnType("varchar(255)");
+
                     b.Property<bool>("IsActive")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("bit")
                         .HasDefaultValue(true);
-
-                    b.Property<DateTime>("LastLoginAt")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("datetime2")
-                        .HasDefaultValueSql("SYSUTCDATETIME()");
 
                     b.Property<string>("Role")
                         .IsRequired()
@@ -158,9 +163,10 @@ namespace DataPersistentApi.Migrations
                         .HasColumnType("varchar(20)")
                         .HasDefaultValue("analyst");
 
-                    b.Property<string>("Username")
-                        .IsRequired()
-                        .HasColumnType("varchar(255)");
+                    b.Property<DateTime>("UpdatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime2")
+                        .HasDefaultValueSql("SYSUTCDATETIME()");
 
                     b.HasKey("Id");
 
@@ -169,12 +175,12 @@ namespace DataPersistentApi.Migrations
                     b.HasIndex("GitHubId")
                         .IsUnique();
 
+                    b.HasIndex("GitHubLogin")
+                        .IsUnique();
+
                     b.HasIndex("IsActive");
 
                     b.HasIndex("Role");
-
-                    b.HasIndex("Username")
-                        .IsUnique();
 
                     b.ToTable("Users");
                 });
