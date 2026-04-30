@@ -24,6 +24,9 @@ The full Stage 3 platform is split into three repositories:
 - `insighta-cli`: a separate command-line client that calls this backend
 - `insighta-web`: a separate browser client that calls this backend
 
+During development, the CLI may live temporarily in a top-level folder inside this workspace as a standalone-ready project before being moved into its own repository.
+The same temporary co-location pattern can be used for the web portal as long as it remains isolated from backend source files.
+
 The backend is the shared contract for both clients. Data, auth rules, role checks, pagination, search behavior, and export behavior are centralized here so all interfaces stay consistent.
 
 ## Tech Stack
@@ -74,6 +77,7 @@ Notes:
 
 - `ClientId` and `ClientSecret` are required for live GitHub OAuth.
 - `CallbackUrl` is optional. If omitted, the backend uses `/auth/github/callback` on the current host.
+- CLI OAuth must supply a `client_redirect_uri` and PKCE challenge parameters.
 
 ### JWT settings
 
@@ -92,6 +96,7 @@ Notes:
 - access tokens expire after `3` minutes
 - refresh tokens expire after `5` minutes
 - refresh tokens are stored hashed in the database
+- `Auth:SigningKey` is required; the backend will not start without it
 
 ### CORS settings
 
@@ -209,6 +214,13 @@ The backend returns JSON containing:
 - `data.authorize_url`
 - `data.state`
 
+CLI requirements:
+
+- provide `client_redirect_uri`
+- provide `code_challenge`
+- provide `code_challenge_method=S256`
+- send the returned protected `state` back to the callback exchange
+
 Complete the flow with:
 
 `GET /auth/github/callback?code=...&state=...&code_verifier=...`
@@ -261,7 +273,7 @@ Token-style success response:
 
 Cookie-style refresh:
 
-- if the refresh token is supplied through the session cookie, the backend rotates cookies and returns `{ "status": "success" }`
+- if the refresh token is supplied through the session cookie, the backend rotates cookies and also returns the rotated token pair in the response body
 - cookie-based refresh requires `X-CSRF-Token`
 
 Logout:
@@ -302,8 +314,8 @@ Roles:
 
 Role rules:
 
-- `admin` can create, list, export, and delete profiles
-- `admin` and `analyst` can read individual profiles and use natural-language search
+- `admin` can create and delete profiles, and can read/query everything
+- `analyst` is read-only and can list, export, read individual profiles, and use natural-language search
 
 Active-state enforcement:
 
@@ -542,7 +554,9 @@ This repository includes GitHub Actions in `.github/workflows/backend-ci.yml`.
 The workflow runs on `push` and `pull_request` to `main` and `master`, and performs:
 
 - `dotnet restore`
+- `dotnet format --verify-no-changes`
 - `dotnet build --configuration Release`
+- `dotnet test --configuration Release`
 
 ## Notes
 
