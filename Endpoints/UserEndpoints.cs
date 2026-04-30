@@ -10,7 +10,7 @@ public static class UserEndpoints
     public static void MapUserEndpoints(this WebApplication app)
     {
         var users = app.MapGroup("/api/users")
-            .RequireAuthorization()
+            .RequireAuthorization(StartupConstants.ReadAccessPolicy)
             .RequireRateLimiting(StartupConstants.ApiRateLimitPolicy);
 
         users.MapGet("/me", async (ClaimsPrincipal principal, AppDBContext db, CancellationToken ct) =>

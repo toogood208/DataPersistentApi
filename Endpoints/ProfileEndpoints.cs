@@ -16,7 +16,7 @@ public static class ProfileEndpoints
     public static void MapProfileEndpoints(this WebApplication app)
     {
         var profiles = app.MapGroup("/api/profiles")
-            .RequireAuthorization()
+            .RequireAuthorization(StartupConstants.ReadAccessPolicy)
             .RequireRateLimiting(StartupConstants.ApiRateLimitPolicy)
             .AddEndpointFilter(new ApiVersionEndpointFilter(StartupConstants.ApiVersionHeader, StartupConstants.ApiVersionValue));
         var csrfFilter = new CsrfEndpointFilter(AuthCookieService.CsrfCookieName, AuthCookieService.CsrfHeaderName);
@@ -125,7 +125,7 @@ public static class ProfileEndpoints
 
             var (total, items) = await svc.QueryAsync(opts);
             return Results.Ok(CreatePagedResponse(req, opts, total, items));
-        }).RequireAuthorization(StartupConstants.AdminOnlyPolicy);
+        });
 
         // GET /api/profiles/search?q=...
         profiles.MapGet("/search", async (HttpRequest req, [FromServices] NlParser parser, ProfilesQueryService svc) =>
@@ -168,7 +168,7 @@ public static class ProfileEndpoints
                 Encoding.UTF8.GetBytes(csv),
                 "text/csv; charset=utf-8",
                 $"profiles_{DateTime.UtcNow:yyyyMMddHHmmss}.csv");
-        }).RequireAuthorization(StartupConstants.AdminOnlyPolicy);
+        });
 
         // DELETE /api/profiles/{id}
         profiles.MapDelete("/{id}", async (string id, ProfileService svc) =>
@@ -357,7 +357,7 @@ public static class ProfileEndpoints
         query["page"] = page.ToString();
         query["limit"] = limit.ToString();
 
-        return QueryHelpers.AddQueryString($"{req.Scheme}://{req.Host}{req.PathBase}{req.Path}", query!);
+        return QueryHelpers.AddQueryString($"{req.PathBase}{req.Path}", query!);
     }
 
     private record ParseQueryResult(bool IsError, QueryOptions? Options)

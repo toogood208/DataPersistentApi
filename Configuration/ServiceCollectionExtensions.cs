@@ -12,6 +12,12 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddInsightaConfiguration(this IServiceCollection services, IConfiguration configuration)
     {
+        services.Configure<GitHubOAuthOptions>(
+            GitHubOAuthOptions.WebOptionsName,
+            configuration.GetSection(GitHubOAuthOptions.SectionName));
+        services.Configure<GitHubOAuthOptions>(
+            GitHubOAuthOptions.CliOptionsName,
+            configuration.GetSection(GitHubOAuthOptions.CliSectionName));
         services.Configure<GitHubOAuthOptions>(configuration.GetSection(GitHubOAuthOptions.SectionName));
         services.Configure<JwtOptions>(configuration.GetSection(JwtOptions.SectionName));
         services.Configure<RoleBootstrapOptions>(configuration.GetSection(RoleBootstrapOptions.SectionName));

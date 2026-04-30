@@ -79,8 +79,11 @@ public class JwtTokenService
 
     private static string GetSigningKey(JwtOptions options)
     {
-        return string.IsNullOrWhiteSpace(options.SigningKey)
-            ? "development-signing-key-change-me-before-production"
-            : options.SigningKey;
+        if (string.IsNullOrWhiteSpace(options.SigningKey))
+        {
+            throw new InvalidOperationException("Auth:SigningKey must be configured.");
+        }
+
+        return options.SigningKey;
     }
 }

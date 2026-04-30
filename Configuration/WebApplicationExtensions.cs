@@ -16,10 +16,10 @@ public static class WebApplicationExtensions
 
         app.UseCors();
         app.UseHttpsRedirection();
+        app.UseMiddleware<RequestLoggingMiddleware>();
         app.UseAuthentication();
         app.UseRateLimiter();
         app.UseAuthorization();
-        app.UseMiddleware<RequestLoggingMiddleware>();
 
         return app;
     }

@@ -23,15 +23,4 @@
     <Folder Include="Configuration\" />
   </ItemGroup>
 
-  <ItemGroup>
-    <Compile Remove="insighta-cli\**\*.cs" />
-    <Content Remove="insighta-cli\**\*" />
-    <EmbeddedResource Remove="insighta-cli\**\*" />
-    <None Remove="insighta-cli\**\*" />
-    <Content Remove="insighta-web\**\*" />
-    <EmbeddedResource Remove="insighta-web\**\*" />
-    <None Remove="insighta-web\**\*" />
-  </ItemGroup>
-
-
 </Project>

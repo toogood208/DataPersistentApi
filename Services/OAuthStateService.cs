@@ -9,13 +9,17 @@ namespace DataPersistentApi.Services;
 
 public class OAuthStateService
 {
+    private static readonly TimeSpan StateLifetime = TimeSpan.FromMinutes(10);
     private readonly byte[] _keyBytes;
 
     public OAuthStateService(IOptions<JwtOptions> jwtOptions)
     {
-        var key = string.IsNullOrWhiteSpace(jwtOptions.Value.SigningKey)
-            ? "development-signing-key-change-me-before-production"
-            : jwtOptions.Value.SigningKey;
+        var key = jwtOptions.Value.SigningKey;
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            throw new InvalidOperationException("Auth:SigningKey must be configured.");
+        }
+
         _keyBytes = Encoding.UTF8.GetBytes(key);
     }
 
@@ -55,6 +59,12 @@ public class OAuthStateService
 
             var parsed = JsonSerializer.Deserialize<OAuthStatePayload>(jsonBytes);
             if (parsed == null)
+            {
+                return false;
+            }
+
+            var issuedAt = DateTimeOffset.FromUnixTimeSeconds(parsed.IssuedAtUnixSeconds);
+            if (issuedAt > DateTimeOffset.UtcNow || DateTimeOffset.UtcNow - issuedAt > StateLifetime)
             {
                 return false;
             }

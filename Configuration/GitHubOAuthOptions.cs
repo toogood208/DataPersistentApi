@@ -3,6 +3,9 @@ namespace DataPersistentApi.Configuration;
 public sealed class GitHubOAuthOptions
 {
     public const string SectionName = "GitHub";
+    public const string CliSectionName = "GitHubCli";
+    public const string WebOptionsName = "GitHubWeb";
+    public const string CliOptionsName = "GitHubCli";
 
     public string ClientId { get; set; } = string.Empty;
     public string ClientSecret { get; set; } = string.Empty;

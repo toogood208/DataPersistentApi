@@ -24,9 +24,6 @@ The full Stage 3 platform is split into three repositories:
 - `insighta-cli`: a separate command-line client that calls this backend
 - `insighta-web`: a separate browser client that calls this backend
 
-During development, the CLI may live temporarily in a top-level folder inside this workspace as a standalone-ready project before being moved into its own repository.
-The same temporary co-location pattern can be used for the web portal as long as it remains isolated from backend source files.
-
 The backend is the shared contract for both clients. Data, auth rules, role checks, pagination, search behavior, and export behavior are centralized here so all interfaces stay consistent.
 
 ## Tech Stack
@@ -388,7 +385,7 @@ Admin and analyst.
 
 `GET /api/profiles`
 
-Admin only.
+Admin and analyst.
 
 Supported query parameters:
 
@@ -440,7 +437,7 @@ Examples:
 
 `GET /api/profiles/export?format=csv`
 
-Admin only.
+Admin and analyst.
 
 The export reuses the same filters and sorting behavior as `GET /api/profiles`.
 

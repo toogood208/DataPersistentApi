@@ -119,8 +119,6 @@ public static class AuthEndpoints
                     rotated.RefreshToken,
                     TimeSpan.FromSeconds(rotated.ExpiresIn),
                     TimeSpan.FromSeconds(rotated.RefreshExpiresIn));
-
-                return Results.Ok(new { status = "success" });
             }
 
             return Results.Ok(new

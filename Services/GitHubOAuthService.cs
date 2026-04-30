@@ -14,7 +14,7 @@ namespace DataPersistentApi.Services;
 public class GitHubOAuthService
 {
     private readonly AppDBContext _db;
-    private readonly GitHubOAuthOptions _options;
+    private readonly IOptionsMonitor<GitHubOAuthOptions> _gitHubOptionsMonitor;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly OAuthStateService _stateService;
     private readonly JwtTokenService _jwtTokenService;
@@ -31,7 +31,7 @@ public class GitHubOAuthService
         RefreshTokenService refreshTokenService,
         AuthCookieService authCookieService,
         ILogger<GitHubOAuthService> logger,
-        IOptions<GitHubOAuthOptions> options,
+        IOptionsMonitor<GitHubOAuthOptions> gitHubOptionsMonitor,
         IOptions<RoleBootstrapOptions> roleBootstrapOptions)
     {
         _db = db;
@@ -41,7 +41,7 @@ public class GitHubOAuthService
         _refreshTokenService = refreshTokenService;
         _authCookieService = authCookieService;
         _logger = logger;
-        _options = options.Value;
+        _gitHubOptionsMonitor = gitHubOptionsMonitor;
         _roleBootstrapOptions = roleBootstrapOptions.Value;
     }
 
@@ -53,7 +53,8 @@ public class GitHubOAuthService
         string? codeChallengeMethod,
         bool expectsRedirect)
     {
-        if (string.IsNullOrWhiteSpace(_options.ClientId))
+        var options = ResolveOptions(expectsRedirect);
+        if (string.IsNullOrWhiteSpace(options.ClientId))
         {
             return AuthRedirectStartResult.Failure("GitHub OAuth is not configured");
         }
@@ -68,6 +69,16 @@ public class GitHubOAuthService
             return AuthRedirectStartResult.Failure("code_challenge is required when code_challenge_method is provided");
         }
 
+        if (!expectsRedirect && string.IsNullOrWhiteSpace(codeChallenge))
+        {
+            return AuthRedirectStartResult.Failure("CLI OAuth requires PKCE");
+        }
+
+        if (!expectsRedirect && string.IsNullOrWhiteSpace(clientRedirectUri))
+        {
+            return AuthRedirectStartResult.Failure("CLI OAuth requires client_redirect_uri");
+        }
+
         if (!string.IsNullOrWhiteSpace(clientRedirectUri) && !Uri.TryCreate(clientRedirectUri, UriKind.Absolute, out _))
         {
             return AuthRedirectStartResult.Failure("Invalid client_redirect_uri");
@@ -77,9 +88,9 @@ public class GitHubOAuthService
         var redirectUri = ResolveAuthorizationRedirectUri(request, clientRedirectUri, expectsRedirect);
         var query = new Dictionary<string, string?>
         {
-            ["client_id"] = _options.ClientId,
+            ["client_id"] = options.ClientId,
             ["redirect_uri"] = redirectUri,
-            ["scope"] = _options.Scope,
+            ["scope"] = options.Scope,
             ["state"] = protectedState
         };
 
@@ -89,34 +100,35 @@ public class GitHubOAuthService
             query["code_challenge_method"] = codeChallengeMethod;
         }
 
-        var authorizeUrl = QueryHelpers.AddQueryString(_options.AuthorizeUrl, query);
+        var authorizeUrl = QueryHelpers.AddQueryString(options.AuthorizeUrl, query);
         return AuthRedirectStartResult.Success(authorizeUrl, protectedState);
     }
 
     public async Task<AuthCompletionResult> CompleteOAuthAsync(HttpRequest request, string code, string? protectedState, string? codeVerifier, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_options.ClientId) || string.IsNullOrWhiteSpace(_options.ClientSecret))
-        {
-            _logger.LogWarning("OAuth callback failed because GitHub OAuth is not configured.");
-            return AuthCompletionResult.Failure("GitHub OAuth is not configured");
-        }
-
         if (string.IsNullOrWhiteSpace(code))
         {
             _logger.LogWarning("OAuth callback failed because the code parameter was missing or empty.");
             return AuthCompletionResult.Failure("Missing or empty code");
         }
 
-        OAuthStateService.OAuthStatePayload? statePayload = null;
-        if (!string.IsNullOrWhiteSpace(protectedState))
+        if (string.IsNullOrWhiteSpace(protectedState))
         {
-            if (!_stateService.TryUnprotect(protectedState, out var parsedState))
-            {
-                _logger.LogWarning("OAuth callback failed because the protected state could not be validated.");
-                return AuthCompletionResult.Failure("Invalid OAuth state");
-            }
+            _logger.LogWarning("OAuth callback failed because the state parameter was missing or empty.");
+            return AuthCompletionResult.Failure("Invalid OAuth state");
+        }
 
-            statePayload = parsedState;
+        if (!_stateService.TryUnprotect(protectedState, out var statePayload))
+        {
+            _logger.LogWarning("OAuth callback failed because the protected state could not be validated.");
+            return AuthCompletionResult.Failure("Invalid OAuth state");
+        }
+
+        var options = ResolveOptions(statePayload?.ExpectsRedirect ?? true);
+        if (string.IsNullOrWhiteSpace(options.ClientId) || string.IsNullOrWhiteSpace(options.ClientSecret))
+        {
+            _logger.LogWarning("OAuth callback failed because GitHub OAuth is not configured for {Mode}.", statePayload?.ExpectsRedirect ?? true ? "web" : "cli");
+            return AuthCompletionResult.Failure("GitHub OAuth is not configured");
         }
 
         var redirectUri = ResolveTokenExchangeRedirectUri(request, statePayload);
@@ -125,9 +137,9 @@ public class GitHubOAuthService
         client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("InsightaBackend", "1.0"));
         client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
-        using var tokenRequest = new HttpRequestMessage(HttpMethod.Post, _options.TokenUrl)
+        using var tokenRequest = new HttpRequestMessage(HttpMethod.Post, options.TokenUrl)
         {
-            Content = new FormUrlEncodedContent(BuildTokenExchangeForm(code, codeVerifier, redirectUri))
+            Content = new FormUrlEncodedContent(BuildTokenExchangeForm(options, code, codeVerifier, redirectUri))
         };
         tokenRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
@@ -155,7 +167,7 @@ public class GitHubOAuthService
             return AuthCompletionResult.Failure("GitHub token exchange failed");
         }
 
-        var profile = await GetGitHubProfileAsync(client, tokenPayload.AccessToken, ct);
+        var profile = await GetGitHubProfileAsync(client, options, tokenPayload.AccessToken, ct);
         if (profile == null || profile.Id <= 0 || string.IsNullOrWhiteSpace(profile.Login))
         {
             _logger.LogWarning("OAuth callback failed because GitHub user lookup did not return a valid profile.");
@@ -165,7 +177,7 @@ public class GitHubOAuthService
         var email = profile.Email;
         if (string.IsNullOrWhiteSpace(email))
         {
-            email = await GetPrimaryEmailAsync(client, tokenPayload.AccessToken, ct);
+            email = await GetPrimaryEmailAsync(client, options, tokenPayload.AccessToken, ct);
         }
 
         _logger.LogInformation(
@@ -257,9 +269,10 @@ public class GitHubOAuthService
 
     private string ResolveBackendCallbackUrl(HttpRequest request)
     {
-        if (!string.IsNullOrWhiteSpace(_options.CallbackUrl))
+        var options = ResolveOptions(true);
+        if (!string.IsNullOrWhiteSpace(options.CallbackUrl))
         {
-            return _options.CallbackUrl;
+            return options.CallbackUrl;
         }
 
         return $"{request.Scheme}://{request.Host}/auth/github/callback";
@@ -286,12 +299,12 @@ public class GitHubOAuthService
         return ResolveBackendCallbackUrl(request);
     }
 
-    private Dictionary<string, string> BuildTokenExchangeForm(string code, string? codeVerifier, string redirectUri)
+    private Dictionary<string, string> BuildTokenExchangeForm(GitHubOAuthOptions options, string code, string? codeVerifier, string redirectUri)
     {
         var form = new Dictionary<string, string>
         {
-            ["client_id"] = _options.ClientId,
-            ["client_secret"] = _options.ClientSecret,
+            ["client_id"] = options.ClientId,
+            ["client_secret"] = options.ClientSecret,
             ["code"] = code,
             ["redirect_uri"] = redirectUri
         };
@@ -304,9 +317,9 @@ public class GitHubOAuthService
         return form;
     }
 
-    private async Task<GitHubUserProfileResponse?> GetGitHubProfileAsync(HttpClient client, string accessToken, CancellationToken ct)
+    private async Task<GitHubUserProfileResponse?> GetGitHubProfileAsync(HttpClient client, GitHubOAuthOptions options, string accessToken, CancellationToken ct)
     {
-        using var profileRequest = new HttpRequestMessage(HttpMethod.Get, _options.UserUrl);
+        using var profileRequest = new HttpRequestMessage(HttpMethod.Get, options.UserUrl);
         profileRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
 
         try
@@ -325,9 +338,9 @@ public class GitHubOAuthService
         }
     }
 
-    private async Task<string?> GetPrimaryEmailAsync(HttpClient client, string accessToken, CancellationToken ct)
+    private async Task<string?> GetPrimaryEmailAsync(HttpClient client, GitHubOAuthOptions options, string accessToken, CancellationToken ct)
     {
-        using var emailRequest = new HttpRequestMessage(HttpMethod.Get, _options.EmailsUrl);
+        using var emailRequest = new HttpRequestMessage(HttpMethod.Get, options.EmailsUrl);
         emailRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
 
         try
@@ -405,6 +418,21 @@ public class GitHubOAuthService
 
         return !string.IsNullOrWhiteSpace(email) &&
                _roleBootstrapOptions.AdminEmails.Any(e => string.Equals(e, email, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private GitHubOAuthOptions ResolveOptions(bool expectsRedirect)
+    {
+        var optionName = expectsRedirect
+            ? GitHubOAuthOptions.WebOptionsName
+            : GitHubOAuthOptions.CliOptionsName;
+
+        var options = _gitHubOptionsMonitor.Get(optionName);
+        if (!expectsRedirect && string.IsNullOrWhiteSpace(options.ClientId))
+        {
+            return _gitHubOptionsMonitor.Get(GitHubOAuthOptions.WebOptionsName);
+        }
+
+        return options;
     }
 
     public record AuthRedirectStartResult(bool IsError, string? Message, string? AuthorizeUrl, string? ProtectedState)
